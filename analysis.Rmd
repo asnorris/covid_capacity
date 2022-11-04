@@ -1,0 +1,754 @@
+---
+title: "Data Analysis"
+author: "Alexandra Norris"
+date: "3/22/2022"
+output: 
+ pdf_document:
+        latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(fig.pos = "!H", out.extra = "")
+knitr::write_bib(c("base", "tinytex", "knitr", "kableExtra", "latexpdf", "readtext", "utils", "stargazer", "tidyverse", "sandwich", "lfe", "grid", "RColorBrewer", "rgdal", "rgeos", "maptools", "seg", "splancs", "gridExtra"), "bibliography.bib", width = 60)
+
+# load r packages
+
+library(wbstats)
+library(tinytex)
+library(knitr)
+library(kableExtra)
+library(latexpdf)
+library(readtext)
+library(utils)
+library(bookdown)
+
+library(janitor)
+library(tidyverse)
+#
+# # need to load latex package "dcolumn" to allow latex tables to run and package
+# # "float" to place tables and figures where I want them to go
+#
+usepackage_latex("dcolumn")
+usepackage_latex("float")
+usepackage_latex("graphicx")
+
+```
+
+```{r}
+# read in data
+covid <- read_csv("full_data.csv")
+
+# read in population data by country
+
+pop <- wb_data("SP.POP.TOTL", start_date = 2020, end_date = 2020) %>%
+  rename(country_name = country) %>%
+  rename(pop = SP.POP.TOTL) %>%
+  select(country_name, pop)
+
+# add in population data so I can do per capita
+covid <- merge(covid, pop)
+
+# add in land cover and 
+
+lc <- read_csv("Country2006_LandCover_300M.csv")
+
+rugged <- read_csv("Country2006_Ruggedness_1KM.csv")
+
+# land <- merge(lc, rugged)
+
+rugged <- rugged %>% 
+  rename(ISO_3 = GMI_CNTRY) %>%
+  rename(country_name = CNTRY_NAME) %>%
+  select(country_name, ISO_3, RANGE, MEAN)
+  
+covid <- merge(covid, rugged)
+
+```
+
+```{r}
+
+weekly_data <- covid %>%
+  group_by(country_name) %>%
+  arrange(date) %>%
+  filter(country_name != -99) %>%
+  mutate(week = cut.Date(date, breaks = "1 week", labels = FALSE)) %>%
+  group_by(country_name, week) %>%
+  mutate(people_week = sum(people_n)) %>%
+  mutate(symptom_week = sum(have_symptoms_n)) %>%
+  mutate(fever_cough_week = sum(fever_cough_n)) %>%
+  mutate(symp_interact_week = sum(symp_interact_n)) %>%
+  mutate(fc_interact_week = sum(fc_interact_n)) %>%
+  mutate(fever_week = sum(fever_n)) %>%
+  mutate(cough_week = sum(cough_n)) %>%
+  mutate(breath_week = sum(dif_breathing_n)) %>%
+  mutate(fatigue_week = sum(fatigue_n)) %>%
+  mutate(nasal_week = sum(nasal_n)) %>%
+  mutate(ache_week = sum(ache_n)) %>%
+  mutate(throat_week = sum(sore_throat_n)) %>%
+  mutate(chest_pain_week = sum(chest_pain_n)) %>%
+  mutate(nausea_week = sum(nausea_n)) %>%
+  mutate(no_taste_week = sum(no_taste_n)) %>%
+  mutate(headache_week = sum(headache_n)) %>%
+  mutate(tested_now_week = sum(tested_now)) %>%
+  mutate(test_pos_week = sum(test_pos)) %>%
+  mutate(test_neg_week = sum(test_neg)) %>%
+  mutate(test_idk_week = sum(test_idk)) %>%
+  mutate(new_cases_week = sum(New_cases)) %>%
+  mutate(new_deaths_week = sum(New_deaths)) %>%
+  ######### CREATE PROPORTION DATA
+  mutate(symptom_prop = (symptom_week/people_week)*100000) %>%
+  mutate(cough_fever_prop = (fever_cough_week/people_week)*100000) %>%
+  ######### Per Capita Data
+  mutate(cases_percap = (new_cases_week/pop)*100000) %>%
+  mutate(deaths_percap = (new_deaths_week/pop)*100000) %>%
+  ######### Compare per capita data
+  mutate(symp_case_comp = symptom_prop/cases_percap) %>%
+  filter_all(all_vars(!is.infinite(.))) %>%
+  mutate(difference = (symptom_week - new_cases_week)/symptom_week) %>%
+  mutate(per_cap_dif = symptom_prop - cases_percap) %>%
+  filter_all(all_vars(!is.infinite(.))) %>%
+  #########
+  select(country_name, ISO_3, week, people_week, symptom_week, fever_cough_week, symp_interact_week, fc_interact_week, fever_week, cough_week, breath_week, fatigue_week, nasal_week, ache_week, throat_week, chest_pain_week, nausea_week, no_taste_week, headache_week, tested_now_week, test_pos_week, test_neg_week, test_idk_week, new_cases_week, new_deaths_week, pop_census, ag_census, vital_registry, capacity_score, symptom_prop, cough_fever_prop, cases_percap, deaths_percap, symp_case_comp, difference, per_cap_dif, MEAN, RANGE) %>%
+  filter(capacity_score %in% c(0,1,2,3)) %>%
+  distinct()
+  
+```
+
+
+```{r}
+
+# plot the number of daily cases
+
+weekly_data %>%
+  group_by(people_week) %>%
+  count() %>%
+  # filter(symptom_week <=1000) %>%
+  filter(people_week <= 100) %>%
+  ggplot(aes(x = people_week, y = n)) +
+  geom_point()
+
+monthly %>%
+  group_by(people_month) %>%
+  count() %>%
+  # filter(symptom_week <=1000) %>%
+  filter(people_month <= 1000) %>%
+  ggplot(aes(x = people_month, y = n)) +
+  geom_point()
+
+
+
+```
+
+
+
+```{r}
+library(lubridate)
+
+
+monthly <- covid %>%
+  group_by(country_name) %>%
+  arrange(date) %>%
+  filter(country_name != -99) %>%
+  mutate_at(vars(date), funs(year, month)) %>%
+  group_by(country_name, month) %>%
+  mutate(people_month = sum(people_n)) %>%
+  mutate(symptom_month = sum(have_symptoms_n)) %>%
+  mutate(fever_cough_month = sum(fever_cough_n)) %>%
+  mutate(symp_interact_month = sum(symp_interact_n)) %>%
+  mutate(fc_interact_month = sum(fc_interact_n)) %>%
+  mutate(fever_month = sum(fever_n)) %>%
+  mutate(cough_month = sum(cough_n)) %>%
+  mutate(breath_month = sum(dif_breathing_n)) %>%
+  mutate(fatigue_month = sum(fatigue_n)) %>%
+  mutate(nasal_month = sum(nasal_n)) %>%
+  mutate(ache_month = sum(ache_n)) %>%
+  mutate(throat_month = sum(sore_throat_n)) %>%
+  mutate(chest_pain_month = sum(chest_pain_n)) %>%
+  mutate(nausea_month = sum(nausea_n)) %>%
+  mutate(no_taste_month = sum(no_taste_n)) %>%
+  mutate(headache_month = sum(headache_n)) %>%
+  mutate(tested_now_month = sum(tested_now)) %>%
+  mutate(test_pos_month = sum(test_pos)) %>%
+  mutate(test_neg_month = sum(test_neg)) %>%
+  mutate(test_idk_month = sum(test_idk)) %>%
+  mutate(new_cases_month = sum(New_cases)) %>%
+  mutate(new_deaths_month = sum(New_deaths)) %>%
+  ######### CREATE PROPORTION DATA
+  mutate(symptom_prop = (symptom_month/people_month)*100000) %>%
+  mutate(cough_fever_prop = (fever_cough_month/people_month)*100000) %>%
+  ######### Per Capita Data
+  mutate(cases_percap = (new_cases_month/pop)*100000) %>%
+  mutate(deaths_percap = (new_deaths_month/pop)*100000) %>%
+  ######### Compare per capita data
+  mutate(symp_case_comp = symptom_prop/cases_percap) %>%
+  na.omit(symptom_case_comp) %>%
+  mutate(difference = (symptom_month - new_cases_month)/symptom_month) %>%
+  mutate(per_cap_dif = symptom_prop - cases_percap) %>%
+  filter_all(all_vars(!is.infinite(.))) %>%
+  #########
+  select(country_name, ISO_3, month, people_month, symptom_month, fever_cough_month, symp_interact_month, fc_interact_month, fever_month, cough_month, breath_month, fatigue_month, nasal_month, ache_month, throat_month, chest_pain_month, nausea_month, no_taste_month, headache_month, tested_now_month, test_pos_month, test_neg_month, test_idk_month, new_cases_month, new_deaths_month, pop_census, ag_census, vital_registry, capacity_score, symptom_prop, cough_fever_prop, cases_percap, deaths_percap, symp_case_comp, difference, per_cap_dif, MEAN, RANGE) %>%
+  filter(capacity_score %in% c(0,1,2,3)) %>%
+  distinct()
+
+
+```
+
+
+```{r, eval=FALSE}
+library(gt)
+
+table <- weekly_data %>%
+  filter(capacity_score %in% c(0,1,2,3)) %>%
+  group_by(country_name) %>%
+  mutate(mean_symp = mean(symptom_prop)) %>%
+  mutate(mean_cases = mean(cases_percap)) %>%
+  mutate(mean_case_dif = mean_cases - mean_symp) %>%
+  mutate(mean_case_prop = mean_symp / mean_cases) %>%
+  mutate(survey_size = mean(people_week)) %>%
+  ungroup() %>%
+  select(country_name, mean_symp, mean_cases, mean_case_dif, mean_case_prop, survey_size, capacity_score) %>%
+  distinct() 
+
+table %>%
+  filter(capacity_score == 0)
+
+table %>%
+  filter(capacity_score == 1)
+
+table %>%
+  select(-c(mean_case_dif, capacity_score)) %>%
+  gt() %>%
+  cols_label(country_name = "Country", mean_symp = "Mean # of symptomatic", mean_cases = "Mean # of cases", mean_case_prop = "Symptom Count / Cases", survey_size = "Sample Size") %>%
+  tab_header("Symptom and Case Comparison - all numbers are per 100,000 people")
+
+
+
+```
+
+```{r}
+# read in control variables
+
+# gdp per capita
+gdp <- wb_data("NY.GDP.MKTP.CD", start_date = 2019, end_date = 2019) %>%
+  select(country, iso3c, NY.GDP.MKTP.CD) %>%
+  mutate(log_gdp = log(NY.GDP.MKTP.CD + 1))
+
+```
+
+```{r}
+# hospital beds/1000
+beds <- wb_data("SH.MED.BEDS.ZS", start_date = 2013, end_date = 2021) %>%
+  filter(date == 2014) %>%
+  rename(beds_per_1000 = SH.MED.BEDS.ZS) %>%
+  select(country, iso3c, beds_per_1000)
+
+# 2013	112			
+# 2014	112			
+# 2015	107			
+# 2016	104			
+# 2017	98			
+# 2018	36			
+# 2019	8			
+# 
+# beds %>%
+#   filter(!is.na(SH.MED.BEDS.ZS)) %>%
+#   group_by(date) %>%
+#   count()
+
+nurses <- wb_data("SH.MED.NUMW.P3", start_date = 2013, end_date = 2020) %>%
+  filter(date == 2014) %>%
+  rename(nurses_per_1000 = SH.MED.NUMW.P3) %>%
+  select(country, iso3c, nurses_per_1000)
+
+# maternal mortality data from UNICEF -- 2017
+mat_mort <- read_csv("maternal_mortality_UNICEF.csv") %>%
+  select(country_name, country_code, `OBS_VALUE:Observation Value`) %>%
+  rename(iso3c = country_code,
+         maternal_mortality = `OBS_VALUE:Observation Value`,
+         country = country_name)
+
+
+# 2013	129			
+# 2014	132	******		
+# 2015	126			
+# 2016	114			
+# 2017	122			
+# 2018	123			
+# 2019	54
+
+# survival to age 65
+
+old_women <- wb_data("SP.DYN.TO65.FE.ZS", start_date = 2019, end_date = 2019)
+
+old_men <- wb_data("SP.DYN.TO65.MA.ZS", start_date = 2019, end_date = 2019)
+
+old <- merge(old_women, old_men) %>%
+  mutate(survival_rate = (SP.DYN.TO65.FE.ZS + SP.DYN.TO65.MA.ZS)/2) %>%
+  select(country, iso3c, survival_rate)
+
+library(readxl)
+
+# average age
+age <- read_xlsx("UN_age.xlsx") %>%
+  janitor::clean_names() %>%
+  rename(iso3c = iso3_alpha_code,
+         country = region_subregion_country_or_area,
+         pop_density = population_density_as_of_1_july_persons_per_square_km,
+         median_age = median_age_as_of_1_july_years) %>%
+  select(iso3c, country, pop_density, median_age) %>%
+  mutate(median_age = as.numeric(median_age))
+
+
+# merge together controls
+m1 <- merge(gdp, mat_mort)
+
+m2 <- merge(m1, age)
+
+controls <- merge(m2, beds) %>%
+  rename(ISO_3 = iso3c) %>%
+  rename(country_name = country)
+
+# write a CSV so I can access the controls in other 
+write_csv(controls, "controls.csv")
+
+```
+
+
+
+```{r, results='asis'}
+
+# merge control variables with the weekly data
+
+full <- merge(weekly_data, controls, by = "ISO_3") %>%
+  filter(people_week >= 100)
+
+full_month <- merge(monthly, controls, by  = "ISO_3") %>%
+  filter(people_month >= 100)
+
+
+
+full %>%
+  select(country_name.x) %>%
+  distinct() %>% arrange()
+
+```
+
+
+\newpage
+# Weekly Data
+
+```{r}
+
+# testing whether the results hold for all components
+
+fit <- lm(per_cap_dif ~ pop_census, data = full)
+
+summary(fit)
+
+fit <- lm(per_cap_dif ~ ag_census, data = full)
+
+summary(fit)
+
+fit <- lm(per_cap_dif ~ vital_registry, data = full)
+
+summary(fit)
+
+fit <- lm(per_cap_dif ~ pop_census + ag_census + vital_registry, data = full)
+
+summary(fit)
+
+```
+
+
+## Simple Capacity
+```{r, results='asis'}
+library(sandwich)
+library(lmtest)
+
+fit1 <- lm(difference ~ capacity_score, data = full)
+se1 <- coeftest(fit1, vcov. = vcovHC(fit1, type = "HC0"))
+fit3 <- lm(difference ~ capacity_score + log_gdp + pop_density, data = full)
+se3 <- coeftest(fit3, vcov. = vcovHC(fit3, type = "HC0"))
+fit4 <- lm(difference ~ capacity_score + log_gdp + pop_density + maternal_mortality + median_age, data = full)
+se4 <- coeftest(fit4, vcov. = vcovHC(fit4, type = "HC0"))
+
+stargazer::stargazer(fit1,fit3,fit4, title = "Standaardized Difference: Weekly",
+                     dep.var.labels = "Standardized Difference", 
+                     covariate.labels = c("Capacity Score", "ln(GDP)", "Population Density", "Maternal Mortality", "Median Age"), type = "text")
+
+
+# ΤABLE ONE!!!!!!!!!!!
+pc1 <- lm(per_cap_dif ~ capacity_score, data = full)
+se1 <- coeftest(pc1, vcov. = vcovHC(pc1, type = "HC0"))
+pc3 <- lm(per_cap_dif ~ capacity_score + log_gdp + MEAN, data = full)
+se3 <- coeftest(pc3, vcov. = vcovHC(pc3, type = "HC0"))
+pc4 <- lm(per_cap_dif ~ capacity_score + log_gdp + MEAN + maternal_mortality + median_age, data = full)
+se4 <- coeftest(pc4, vcov. = vcovHC(pc4, type = "HC0"))
+
+stargazer::stargazer(pc1,pc3,pc4,se4, title = "Difference Between Symptoms and Cases per 100,000 People", 
+                     covariate.labels = c("Capacity Score", "ln(GDP)", "Terrain Ruggedness", "Maternal Mortality", "Median Age"),
+                     dep.var.labels = c("Difference", "", "Difference", "", "Difference", ""), type = "text")
+
+```
+
+```{r, results='asis'}
+# rerun the above code but using different components of state capacity
+
+fit1 <- lm(difference ~ pop_census + ag_census + vital_registry, data = full)
+fit4 <- lm(difference ~ pop_census + ag_census + vital_registry + log_gdp + MEAN + maternal_mortality + survival_rate, data = full)
+
+stargazer::stargazer(fit1,fit4, title = "Standaardized Difference: Weekly",
+                     dep.var.labels = "Standardized Difference", 
+                     type = "text")
+
+fit1 <- lm(per_cap_dif ~ pop_census + ag_census + vital_registry, data = full)
+fit4 <- lm(per_cap_dif ~ pop_census + ag_census + vital_registry + log_gdp + MEAN + maternal_mortality + survival_rate, data = full)
+
+stargazer::stargazer(fit1,fit4, title = "Per capita difference: Weekly",
+                     dep.var.labels = "Difference", 
+                     type = "text")                  
+
+
+```
+
+
+```{r}
+library(haven)
+library(janitor)
+
+# test with the more comprehensive measure of state capacity
+hs <- read_dta("HansonSigman_source.dta") %>%
+  clean_names() %>%
+  filter(year == 2015) %>%
+  rename(ISO_3 = iso3) %>%
+  select(ISO_3, country, capacity) %>%
+  rename(country_name = country)
+
+c <- read_xlsx("Cleaned WB data on statistical capacity_AN.xlsx") %>%
+  filter(time == 2019) %>%
+  select(!error)
+
+new_sc <- left_join(c, hs) %>%
+  na.omit(capacity)
+
+cor(new_sc$capacity_score, new_sc$capacity)
+
+# Test with Lee and Zhang article data - inv_lmyers
+
+lee <- read_dta("Myers all.dta") %>%
+  rename(country_name = country) %>%
+  filter(year >= 2002) %>%
+  select(myers, country_name, year) %>%
+  group_by(country_name) %>%
+  mutate(last = lead(year)) %>%
+  filter(is.na(last)) %>%
+  select(-c(year, last))
+
+test <- left_join(c, lee) %>%
+  na.omit(myers)
+
+cor(test$myers, test$capacity_score)
+
+# fragile states index
+
+# rank <- read_xlsx("Rankings.xlsx")
+# 
+# rank
+# 
+# d <- left_join(c, rank) %>%
+#   na.omit(Total)
+# 
+# cor(d$capacity_score, d$Total)
+
+# WGI
+
+wgi <- read_xlsx("wgidataset (1).xlsx") %>%
+  mutate(Estimate = as.numeric(Estimate)) %>%
+  na.omit(Estimate) %>%
+  filter(measure == "gov_effective") %>%
+  rename(country_name = "Country/Territory")
+
+test <- left_join(c, wgi) %>%
+  na.omit(Estimate)
+  mutate(Estimate = as.numeric(Estimate),
+         capacity_score = as.numeric(capacity_score))
+
+cor(test$capacity_score, test$Estimate)
+
+```
+
+```{r}
+
+# relationship between measure and HS
+
+test <- lm(capacity ~ capacity_score, data = new_sc)
+
+stargazer::stargazer(test, type = "text")
+
+cor(new_sc$capacity_score, new_sc$capacity)
+
+x <- new_sc %>%
+  select(capacity, country_name.x, capacity_score) %>%
+  dplyr::distinct()
+
+read_xlsx("Cleaned WB data on statistical capacity (4).xlsx") %>%
+  select(country_name) %>%
+  dplyr::distinct()
+
+```
+
+
+\newpage
+## Hansen Sigman Capacity
+```{r, results='asis'}
+
+# add HS data to full
+hs_full <- left_join(full, hs)
+
+fit1 <- lm(difference ~ capacity, data = hs_full)
+fit2 <- lm(difference ~ capacity + log_gdp, data = hs_full)
+fit3 <- lm(difference ~ capacity + log_gdp + MEAN, data = hs_full)
+fit4 <- lm(difference ~ capacity + log_gdp + log_gdp + MEAN + maternal_mortality + median_age, data = hs_full)
+
+
+stargazer::stargazer(fit1,fit3, fit4, title = "Standardized Difference: Hanson and Sigman (2021) Capacity Measure",
+                     covariate.labels = c("Complex Capacity", "ln(GDP)", "Terrain Ruggedness", "Maternal Mortality", "Age 65 Survival Rate"),
+                     dep.var.labels = "Standardized Difference")
+
+
+
+#TABLE 2!!!!!!!
+pc1 <- lm(per_cap_dif ~ capacity, data = hs_full)
+pc2 <- lm(per_cap_dif ~ capacity + log_gdp, data = hs_full)
+pc3 <- lm(per_cap_dif ~ capacity + log_gdp + MEAN, data = hs_full)
+pc4 <- lm(per_cap_dif ~ capacity + log_gdp + MEAN + maternal_mortality + median_age, data = hs_full)
+
+stargazer::stargazer(pc1,pc3,pc4, title = "Difference Between Symptoms and Cases per 100,000 People: Hanson and Sigman (2021) Capacity Measure",
+                     covariate.labels = c("Complex Capacity", "ln(GDP)", "Terrain Ruggedness", "Maternal Mortality", "Median Age"),
+                     dep.var.labels = "Difference", type = "text")
+
+```
+
+\newpage
+
+# Monthly Data
+
+## Simple Capacity
+
+```{r, results='asis'}
+library(sandwich)
+library(lmtest)
+
+fit1 <- lm(difference ~ capacity_score, data = full_month)
+fit2 <- lm(difference ~ capacity_score + log_gdp, data = full_month)
+se2 <- coeftest(fit2, vcov. = vcovHC(fit2, type = "HC0"))
+fit3 <- lm(difference ~ capacity_score + log_gdp + MEAN, data = full_month)
+fit4 <- lm(difference ~ capacity_score + log_gdp + MEAN + survival_rate + maternal_mortality, data = full_month)
+
+stargazer::stargazer(fit1,fit3, fit4, title = "Standardized Difference: Monthly", 
+                     covariate.labels = c("Capacity Score", "ln(GDP)", "Terrain Ruggedness", "Maternal Mortality", "Age 65 Survival Rate"),
+                     dep.var.labels = "Standardized Difference")
+
+
+pc1 <- lm(per_cap_dif ~ capacity_score, data = full_month)
+pc2 <- lm(per_cap_dif ~ capacity_score + log_gdp, data = full_month)
+pc3 <- lm(per_cap_dif ~ capacity_score + log_gdp + MEAN, data = full_month)
+pc4 <- lm(per_cap_dif ~ capacity_score + log_gdp + MEAN + survival_rate + maternal_mortality, data = full_month)
+
+stargazer::stargazer(pc1,pc3,pc4, title = "Difference Between Symptoms and Cases per 100,000 People: Monthly",
+                     covariate.labels = c("Capacity Score", "ln(GDP)", "Terrain Ruggedness", "Maternal Mortality", "Age 65 Survival Rate"),
+                     dep.var.labels = "Difference")
+```
+```{r}
+
+new_sc_month <- merge(full_month, hs)
+
+```
+
+\newpage
+## Hansen Sigman Capacity
+
+```{r, results='asis'}
+
+fit1 <- lm(difference ~ capacity, data = new_sc_month)
+fit2 <- lm(difference ~ capacity + log_gdp, data = new_sc_month)
+fit3 <- lm(difference ~ capacity + log_gdp + MEAN, data = new_sc_month)
+fit4 <- lm(difference ~ capacity + log_gdp + MEAN + survival_rate + maternal_mortality, data = new_sc_month)
+
+stargazer::stargazer(fit1,fit2,fit3, fit4, title = "Monthly: Difference  = (symptoms - cases) / symptoms")
+
+
+pc1 <- lm(per_cap_dif ~ capacity, data = new_sc_month)
+pc2 <- lm(per_cap_dif ~ capacity + log_gdp, data = new_sc_month)
+pc3 <- lm(per_cap_dif ~ capacity + log_gdp + MEAN, data = new_sc_month)
+pc4 <- lm(per_cap_dif ~ capacity + log_gdp + MEAN + survival_rate + maternal_mortality, data = new_sc_month)
+
+stargazer::stargazer(pc1,pc2,pc3,pc4, title = "Monthly: symptoms per 100,000 - cases per 100,000")
+
+```
+
+
+
+
+
+
+
+```{r, eval=FALSE}
+# run a number of regressions
+
+# use capacity to explain ratio of symptoms per 100,000 and cases per 100,000
+fit1 <- lm(symp_case_comp ~ capacity_score, data = full)
+fit2 <- lm(symp_case_comp ~ capacity_score + log_gdp, data = full)
+fit3 <- lm(symp_case_comp ~ capacity_score + log_gdp + survival_rate, data = full)
+fit4 <- lm(symp_case_comp ~ capacity_score + log_gdp + survival_rate + maternal_mortality + doctors_per_1000 + beds_per_1000, data = full)
+fit5 <- lm(symp_case_comp ~ capacity_score + log_gdp + maternal_mortality, data = full)
+fit6 <- lm(symp_case_comp ~ capacity_score + log_gdp + doctors_per_1000, data = full)
+fit7 <- lm(symp_case_comp ~ capacity_score + log_gdp + beds_per_1000, data = full)
+stargazer::stargazer(fit1,fit2,fit3, fit4)
+stargazer::stargazer(fit5,fit6,fit7)
+
+```
+
+
+
+
+```{r, results='asis', eval=FALSE}
+# difference - standardized
+dif1 <- lm(difference ~ capacity_score, data = full)
+dif2 <- lm(difference ~ capacity_score + log_gdp, data = full)
+dif3 <- lm(difference ~ capacity_score + log_gdp + survival_rate, data = full)
+dif4 <- lm(difference ~ capacity_score + log_gdp + survival_rate + maternal_mortality + doctors_per_1000 + beds_per_1000, data = full)
+dif5 <- lm(difference ~ capacity_score + log_gdp + maternal_mortality, data = full)
+dif6 <- lm(difference ~ capacity_score + log_gdp + doctors_per_1000, data = full)
+dif7 <- lm(difference ~ capacity_score + log_gdp + beds_per_1000, data = full)
+stargazer::stargazer(dif1,dif2,dif3, dif4)
+stargazer::stargazer(dif5,dif6,dif7)
+
+```
+
+
+
+
+```{r, results='asis', eval=FALSE}
+# per cap difference
+pcdif1 <- lm(per_cap_dif ~ capacity_score, data = full)
+pcdif2 <- lm(per_cap_dif ~ capacity_score + log_gdp, data = full)
+pcdif3 <- lm(per_cap_dif ~ capacity_score + log_gdp + survival_rate, data = full)
+pcdif4 <- lm(per_cap_dif ~ capacity_score + log_gdp + survival_rate + maternal_mortality + doctors_per_1000 + beds_per_1000, data = full)
+pcdif5 <- lm(per_cap_dif ~ capacity_score + log_gdp + maternal_mortality, data = full)
+pcdif6 <- lm(per_cap_dif ~ capacity_score + log_gdp + doctors_per_1000, data = full)
+pcdif7 <- lm(per_cap_dif ~ capacity_score + log_gdp + beds_per_1000, data = full)
+stargazer::stargazer(pcdif1,pcdif2,pcdif3)
+stargazer::stargazer(pcdif4, pcdif5,pcdif6,pcdif7)
+
+```
+
+
+
+
+```{r, eval=FALSE}
+# explain symptoms
+fit4 <- lm(symptom_week ~ capacity_score, data = weekly_data)
+stargazer::stargazer(fit4, type = "text")
+
+# explain cases
+fit5 <- lm(new_cases_week ~ capacity_score, data = weekly_data)
+stargazer::stargazer(fit5, type = "text")
+
+
+
+
+```
+
+```{r}
+
+
+weekly_data %>%
+  select(difference) %>%
+  mutate(pos = ifelse(difference >= 0, 1,0)) %>%
+  group_by(pos) %>%
+  count
+
+weekly_data %>%
+  group_by(country_name) %>%
+  mutate(mean_dif = mean(difference)) %>%
+  ungroup() %>%
+  filter(mean_dif >=0) %>%
+  select(country_name) %>%
+  distinct()
+
+average <- weekly_data %>%
+  group_by(country_name) %>%
+  mutate(mean_dif = mean(difference)) %>%
+  ungroup() %>%
+  arrange(mean_dif) %>%
+  select(country_name, mean_dif) %>%
+  distinct() 
+
+library(gt)
+
+table_gt <- gt(average)
+gtsave(table_gt, "country_rank.html")
+
+
+full %>%
+  group_by(ISO_3) %>%
+  # filter(country_name != "Georgia") %>%
+  mutate(n_obs = n()) %>%
+  mutate(mean_dif = mean(per_cap_dif)) %>%
+  ungroup() %>%
+  ggplot(aes(x = capacity_score, y = mean_dif)) +
+  geom_point() +
+  geom_smooth(method = "lm")
+
+full %>%
+  # filter(country_name != "Georgia") %>%
+  ggplot(aes(x = capacity_score, y = per_cap_dif)) +
+  geom_point() +
+  geom_smooth(method = "lm")
+
+
+weekly_data %>%
+  filter(country_name == "Georgia")
+
+```
+```{r}
+
+weekly_data %>%
+  group_by(country_name) %>%
+  mutate(country_avj = mean(per_cap_dif)) %>%
+  select(country_name, country_avj) %>%
+  distinct() %>%
+  arrange(country_avj)
+
+
+
+
+```
+sudan: 55838.45	
+
+cameroon: 	57729.04	
+
+CAR: 49287.66
+
+Angola: 44869.27	
+
+Ethiopia	36933.17	
+
+Djibouti	52017.21
+
+Burundi	53065.22	
+
+Rwanda	44758.72	
+
+
+```{r}
+# Descriptive Statistics
+
+
+
+
+```
+

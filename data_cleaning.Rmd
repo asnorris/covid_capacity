@@ -1,0 +1,133 @@
+---
+title: "Covid Capacity"
+author: "Alexandra Norris"
+date: "2/4/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+
+library(lubridate)
+library(tidyverse)
+
+test <- read_csv("zipped_covid_data/2020-08-25_full.csv.gz")
+# library(plyr)
+
+```
+
+```{r, include=FALSE}
+
+# extract list of names of files in folder
+all_files <- list.files(path = "zipped_covid_data", full.names = TRUE)
+
+# make a function that reads in dataset, condenses it into one row per country
+
+clean_data <- function(file){
+  
+  x <- read_csv(file) %>%
+    # remove time from the data so that it only is
+  mutate(date =  format(as.POSIXct(RecordedDate,format='%m/%d/%Y %H:%M:%S'),format='%Y-%m-%d')) %>%
+  mutate(date = as.Date(date)) %>%
+    # there was an issue with double counting - this eliminates data from the next day
+  mutate(next_day = ifelse(date > median(date),1,0)) %>%
+  filter(next_day == 0) %>%
+    mutate(B1_1 = ifelse(B1_1 == 1,1,0)) %>%
+    mutate(B1_2 = ifelse(B1_2 == 1,1,0)) %>%
+    mutate(B1_3 = ifelse(B1_3 == 1,1,0)) %>%
+    mutate(B1_4 = ifelse(B1_4 == 1,1,0)) %>%
+    mutate(B1_5 = ifelse(B1_5 == 1,1,0)) %>%
+    mutate(B1_6 = ifelse(B1_6 == 1,1,0)) %>%
+    mutate(B1_7 = ifelse(B1_7 == 1,1,0)) %>%
+    mutate(B1_8 = ifelse(B1_8 == 1,1,0)) %>%
+    mutate(B1_9 = ifelse(B1_9 == 1,1,0)) %>%
+    mutate(B1_10 = ifelse(B1_10 == 1,1,0)) %>%
+    # no 11 because "eye pain" is weird
+    mutate(B1_12 = ifelse(B1_12 == 1,1,0)) %>%
+    mutate(total_symptoms = B1_1 + B1_2 + B1_3 + B1_4 + B1_5 + B1_6 + B1_7 + B1_8 + B1_9 + B1_10 + B1_12) %>%
+    mutate(any_symptoms = ifelse(total_symptoms >= 1, 1,0)) %>%
+    mutate(fever_or_cough = ifelse((B1_1 + B1_2) >= 1,1,0)) %>%
+    mutate(symptom_interact = ifelse(any_symptoms >= 1 & B5 == 1,1,0)) %>%
+    mutate(fc_interact = ifelse(fever_or_cough == 1 & B5==1,1,0)) %>%
+    group_by(ISO_3) %>%  
+    mutate(have_symptoms_n = sum(any_symptoms == 1)) %>%
+    mutate(fever_cough_n = sum(fever_or_cough==1)) %>%
+    mutate(symp_interact_n = sum(symptom_interact==1)) %>%
+    mutate(fc_interact_n = sum(fc_interact == 1)) %>%
+    mutate(people_n = n()) %>%
+    mutate(fever_n = sum(B1_1 == 1)) %>%
+  mutate(cough_n = sum(B1_2 == 1)) %>%
+  mutate(dif_breathing_n = sum(B1_3 == 1)) %>%
+  mutate(fatigue_n = sum(B1_4 == 1)) %>%
+  mutate(nasal_n = sum(B1_5 == 1)) %>%
+  mutate(ache_n = sum(B1_6 == 1)) %>%
+  mutate(sore_throat_n = sum(B1_7 == 1)) %>%
+  mutate(chest_pain_n = sum(B1_8 == 1)) %>%
+  mutate(nausea_n = sum(B1_9 == 1)) %>%
+  mutate(no_taste_n = sum(B1_10 == 1)) %>%
+  mutate(eye_pain_n = sum(B1_11 == 1)) %>%
+  mutate(headache_n = sum(B1_12 == 1)) %>%
+  # mutate(chills_n = sum(B1_13 == 1)) %>%
+  mutate(know_someone_symptom = sum(B3 == 1)) %>%
+  mutate(been_with_sick = sum(B5 == 1)) %>%
+  mutate(ever_tested = sum(B6 == 1)) %>%
+  mutate(tested_now = sum(B7 == 1)) %>%
+  mutate(test_pos = sum(B8 == 1)) %>%
+  mutate(test_neg = sum(B8 == 2)) %>%
+  mutate(test_idk = sum(B8 == 3)) %>%
+  select(date, ISO_3, NAME_0, people_n, have_symptoms_n, fever_cough_n, symp_interact_n, fc_interact_n, fever_n, cough_n, dif_breathing_n, fatigue_n, nasal_n, ache_n, sore_throat_n, chest_pain_n,     nausea_n, no_taste_n, eye_pain_n, headache_n, know_someone_symptom, been_with_sick, ever_tested, tested_now, test_pos, test_neg, test_idk) %>%
+  distinct()
+  
+  return(x)
+ 
+  
+}
+
+
+
+
+```
+
+
+```{r, include=FALSE}
+
+# create a list with all of the cleaned dataframes for each day
+data <- lapply(all_files, clean_data)
+
+# merge into one data frame - don't load plyr because it messes up  "n()"
+df <- plyr::ldply(data, data.frame)
+
+```
+
+```{r}
+# merge data with capacity
+df <- df %>%
+  rename(country_name = NAME_0)
+  
+# load capacity
+# lag capacity so that it references the year before as to avoid reverse causality
+library(readxl)
+cap <- read_xlsx("Cleaned WB data on statistical capacity_AN.xlsx") %>%
+  filter(time == 2019) %>%
+  select(!time)
+
+
+df <- left_join(df, cap)
+
+# merge with covid data
+
+covid <- read_csv("official_cases.csv") %>%
+  rename(country_name = Country) %>%
+  mutate(date = as.Date(Date_reported, format = '%m-%d-%Y'))
+
+final <- left_join(df, covid) %>%
+  distinct()
+
+
+
+write_csv(final, "full_data.csv")
+
+
+```
+
